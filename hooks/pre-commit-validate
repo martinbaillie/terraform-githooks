@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -o errexit
+set -o pipefail
+
+RED='\033[0;31m'
+GRN='\033[0;32m'
+NOC='\033[0m'
+CHECK="${GRN}✔${NOC}"
+CROSS="${RED}✘${NOC}"
+
+VALIDATE="validate-$(date +%s).out"
+
+# Cleanup
+finish() { find . -type f -name "${VALIDATE}" -exec rm {} \; ; }
+trap finish EXIT
+
+declare -a dirs
+i=0
+for p in $(git diff --cached --name-only); do
+  dirs[i]=$(dirname "${p}")
+  (( i+=1 ))
+done
+
+ret=0
+for d in $(echo "${dirs[*]}" | tr ' ' '\n' | sort -u); do
+  pushd "${d}" > /dev/null
+  if ! terraform validate -no-color -check-variables=false &>"${VALIDATE}"; then
+    echo >&2 -e \
+      "${CROSS} terraform validate: directory \"${d}\" has errors"
+    sed >&2 -e '/^\s*$/d' -e 's/^Error:/  */g' < "${VALIDATE}" 
+    ret=1
+  fi
+  popd > /dev/null
+done
+
+# Clean up and exit.
+[ $ret -eq 0 ] && echo -e "${CHECK} terraform validate"
+exit ${ret}

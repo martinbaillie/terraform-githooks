@@ -1,0 +1,63 @@
+#!/usr/bin/env bash 
+set -o errexit
+set -o pipefail
+
+RED='\033[0;31m'
+GRN='\033[0;32m'
+NOC='\033[0m'
+CHECK="${GRN}✔${NOC}"
+CROSS="${RED}✘${NOC}"
+
+PATCH_NAME="pre-commit-docs-$(date +%s).patch"
+DOCUMENTER_OUT="documenter-$(date +%s).out"
+MARKDOWN_FILE="README.md"
+
+# Cleanup
+finish() { rm -f "${PATCH_NAME}" "${DOCUMENTER_OUT}"; }
+trap finish EXIT
+
+# Find the difference between what is staged and what is modified but unstaged.
+git diff > "${PATCH_NAME}"
+
+# Remove un-staged changes.
+if [[ -s "${PATCH_NAME}" ]]; then
+    git apply --reverse "${PATCH_NAME}"
+fi
+
+ret=0
+if ! terraform-documenter -source README.md -verify &> "${DOCUMENTER_OUT}"; then
+  # Print and exit if any input/output variables are missing a description.
+  echo >&2 -e \
+    "${CROSS} terraform-documenter: directory \".\" has documentation issues"
+  cat >&2 "${DOCUMENTER_OUT}"
+  ret=1
+else
+  # Create a diff for the Markdown file.
+  # The seds are necessary to transform the patch from
+  #    --- $file timestamp
+  #    +++ - timestamp
+  # to both lines working on the same file and having a a/ and b/ prefix.
+  # Otherwise it can not be applied with 'git apply'.
+  diff -u "${MARKDOWN_FILE}" - < "${DOCUMENTER_OUT}" \
+	| sed -e "1s|--- |--- a/|" -e "2s|+++ -|+++ b/${MARKDOWN_FILE}|" \
+	> "${MARKDOWN_FILE}.patch" || :
+
+  if  [ -s "${MARKDOWN_FILE}.patch" ]; then
+	# Inform user about out-of-date Markdown file.
+	echo >&2 -e "${CROSS} terraform-documenter: ${MARKDOWN_FILE} out-of-date"
+	echo >&2 "  * patch generated, apply with: git apply ${MARKDOWN_FILE}.patch"
+	ret=1
+  else
+	# Else remove empty patch file.
+	rm -f "${MARKDOWN_FILE}.patch"
+  fi
+fi
+
+# Add back un-staged changes.
+if [[ -s "${PATCH_NAME}" ]]; then
+    git apply "${PATCH_NAME}"
+fi
+
+# Clean up and exit.
+[ $ret -eq 0 ] && echo -e "${CHECK} terraform-documenter"
+exit ${ret}
